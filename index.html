@@ -9,13 +9,13 @@
 </style>
 </head>
 <body>
-<h1>📷 Escáner Linde V2</h1>
+<h1>📷 Escáner Linde V3</h1>
 <p>Prueba de lectura de códigos de barras. No modifica el inventario.</p>
 <section>
 <video id="preview" autoplay playsinline muted></video>
 <div><button id="start">Iniciar cámara</button><button id="stop" class="secondary" disabled>Detener</button></div>
 <div id="status" class="status" role="status">Listo para iniciar.</div><p id="diagnostic" class="muted">Motor: pendiente de comprobar.</p>
-<p class="muted">Apunta a la etiqueta pequeña de Linde y mantén el código completo dentro de la imagen. No es necesario fotografiarlo.</p>
+<p class="muted">Solo se acepta un código si se lee 3 veces iguales en 2 segundos. Después de cada lectura, retira el código de la cámara antes de continuar.</p><p class="muted">Apunta a la etiqueta pequeña de Linde y mantén el código completo dentro de la imagen. No es necesario fotografiarlo.</p>
 </section>
 <section>
 <div>Códigos diferentes detectados</div><div id="count" class="count">0</div>
@@ -27,24 +27,38 @@
 'use strict';
 const video=document.getElementById('preview'), status=document.getElementById('status'), diagnostic=document.getElementById('diagnostic'), list=document.getElementById('list'), count=document.getElementById('count');
 const startBtn=document.getElementById('start'), stopBtn=document.getElementById('stop');
-let stream=null, reader=null, controls=null, detector=null, active=false, audio=null, lastCode='', lastAt=0, scans=0, loopId=0;
+let stream=null, reader=null, controls=null, detector=null, active=false, audio=null, lastCode='', lastAt=0, scans=0, loopId=0, candidate='', hits=0, candidateAt=0, locked=false, absentAt=0;
 const seen=new Set();
 const show=(msg,type='')=>{status.textContent=msg;status.className='status '+type;};
-function tone(error){try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;audio=audio||new C();audio.resume();const play=(at,f,d)=>{let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.setValueAtTime(.0001,at);g.gain.exponentialRampToValueAtTime(.12,at+.015);g.gain.exponentialRampToValueAtTime(.0001,at+d);o.connect(g);g.connect(audio.destination);o.start(at);o.stop(at+d+.02)};let t=audio.currentTime;error?(play(t,330,.12),play(t+.16,260,.17)):play(t,850,.12)}catch(e){}}
-function detected(value){const code=String(value||'').trim();if(!code)return;let now=Date.now();if(code===lastCode&&now-lastAt<2200)return;lastCode=code;lastAt=now;if(seen.has(code)){show('⚠️ REPETIDO: '+code,'err');tone(true);return;}seen.add(code);count.textContent=seen.size;const li=document.createElement('li');li.textContent=code;list.prepend(li);show('✅ NUEVO: '+code,'ok');tone(false);}
+function tone(error){try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;audio=audio||new C();audio.resume();const play=(at,f,d)=>{let o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.setValueAtTime(.0001,at);g.gain.exponentialRampToValueAtTime(.35,at+.015);g.gain.exponentialRampToValueAtTime(.0001,at+d);o.connect(g);g.connect(audio.destination);o.start(at);o.stop(at+d+.02)};let t=audio.currentTime;error?(play(t,330,.12),play(t+.16,260,.17)):play(t,850,.12)}catch(e){}}
+function detected(value){
+ const code=String(value||'').trim(); if(!code)return;
+ const now=Date.now();
+ if(locked){ if(code!==lastCode){locked=false;candidate='';hits=0;}else return; }
+ if(code!==candidate||now-candidateAt>2000){candidate=code;hits=1;candidateAt=now;}
+ else hits++;
+ diagnostic.textContent='Verificando lectura: '+hits+'/3 · '+code;
+ if(hits<3)return;
+ candidate='';hits=0;lastCode=code;lastAt=now;locked=true;
+ if(seen.has(code)){show('⚠️ REPETIDO: '+code+' · Retira la etiqueta para continuar','err');tone(true);return;}
+ seen.add(code);count.textContent=seen.size;
+ const li=document.createElement('li');li.textContent=code;list.prepend(li);
+ show('✅ CONFIRMADO: '+code+' · Retira la etiqueta para continuar','ok');tone(false);
+}
+function noDetection(){if(locked){if(!absentAt)absentAt=Date.now();if(Date.now()-absentAt>800){locked=false;absentAt=0;}}else absentAt=0;}
 async function stop(){active=false;cancelAnimationFrame(loopId);try{controls?.stop?.()}catch(e){}try{reader?.reset?.()}catch(e){}controls=null;reader=null;detector=null;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}if(video.srcObject){video.srcObject.getTracks().forEach(t=>t.stop());video.srcObject=null;}startBtn.disabled=false;stopBtn.disabled=true;}
-async function nativeLoop(){if(!active||!detector)return;try{if(video.readyState>=2){scans++;const codes=await detector.detect(video);if(codes.length)detected(codes[0].rawValue);if(scans%20===0)diagnostic.textContent='Motor nativo activo · Fotogramas analizados: '+scans;}}catch(e){diagnostic.textContent='Error del motor nativo: '+e.message;}if(active)loopId=requestAnimationFrame(nativeLoop);}
+async function nativeLoop(){if(!active||!detector)return;try{if(video.readyState>=2){scans++;const codes=await detector.detect(video);if(codes.length){absentAt=0;detected(codes[0].rawValue);}else noDetection();if(scans%20===0)diagnostic.textContent='Motor nativo activo · Fotogramas analizados: '+scans;}}catch(e){diagnostic.textContent='Error del motor nativo: '+e.message;}if(active)loopId=requestAnimationFrame(nativeLoop);}
 startBtn.onclick=async()=>{if(active)return;if(!window.isSecureContext){show('Necesitas HTTPS.','err');return;}if(!navigator.mediaDevices?.getUserMedia){show('Cámara no disponible.','err');return;}active=true;scans=0;startBtn.disabled=true;stopBtn.disabled=false;show('Abriendo cámara...');try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();await audio.resume();}catch(e){}
 try{
  if('BarcodeDetector' in window){let formats=await BarcodeDetector.getSupportedFormats();diagnostic.textContent='Detector nativo disponible · Formatos: '+formats.join(', ');const wanted=['code_128','code_39','ean_13','ean_8','upc_a','upc_e','itf','codabar'].filter(f=>formats.includes(f));if(wanted.length){detector=new BarcodeDetector({formats:wanted});stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});video.srcObject=stream;await video.play();show('Cámara activa · Detector nativo analizando...');nativeLoop();return;}}
  if(!window.ZXing)throw Error('No se cargó ZXing y el detector nativo no está disponible.');
  diagnostic.textContent='Motor ZXing activo · Buscando códigos...';reader=new ZXing.BrowserMultiFormatReader();
- controls=await reader.decodeFromVideoDevice(undefined,video,(result,error)=>{if(!active)return;scans++;if(result)detected(result.getText());else if(scans%40===0)diagnostic.textContent='ZXing analizando · Intentos: '+scans+(error&&!(error instanceof ZXing.NotFoundException)?' · '+error.name:'');});
+ controls=await reader.decodeFromVideoDevice(undefined,video,(result,error)=>{if(!active)return;scans++;if(result){absentAt=0;detected(result.getText());}else {noDetection();} if(!result&&scans%40===0)diagnostic.textContent='ZXing analizando · Intentos: '+scans+(error&&!(error instanceof ZXing.NotFoundException)?' · '+error.name:'');});
  if(active&&seen.size===0)show('Cámara activa · ZXing buscando códigos...');
 }catch(e){show('Error: '+(e.message||e),'err');diagnostic.textContent='No se pudo iniciar el lector.';await stop();}
 };
 stopBtn.onclick=async()=>{await stop();show('Cámara detenida.');};
-document.getElementById('clear').onclick=()=>{if(!confirm('¿Limpiar lista de prueba?'))return;seen.clear();list.textContent='';count.textContent='0';lastCode='';lastAt=0;show('Lista limpia.');};
+document.getElementById('clear').onclick=()=>{if(!confirm('¿Limpiar lista de prueba?'))return;seen.clear();list.textContent='';count.textContent='0';lastCode='';lastAt=0;candidate='';hits=0;locked=false;show('Lista limpia.');};
 window.addEventListener('pagehide',()=>{stop();});
 })();
 </script>
