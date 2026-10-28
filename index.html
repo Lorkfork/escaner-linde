@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Escáner Linde — Prueba</title>
+<style>
+:root{font-family:system-ui,-apple-system,Arial,sans-serif;color:#162235;background:#eef2f7}*{box-sizing:border-box}body{margin:0;padding:18px;max-width:720px;margin-inline:auto}h1{font-size:1.65rem;margin:12px 0 4px}p{color:#586477}section{background:white;border-radius:16px;padding:16px;margin:15px 0;box-shadow:0 2px 10px #10203012}video{width:100%;aspect-ratio:4/3;background:#101216;object-fit:cover;border-radius:12px}button{border:0;border-radius:10px;padding:13px 16px;font-weight:700;font-size:1rem;color:white;background:#0879d2;cursor:pointer;margin:6px 6px 6px 0}button:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#64748b}.danger{background:#b91c1c}.status{border-radius:10px;padding:12px;margin-top:12px;background:#e8f0fa;font-weight:650;overflow-wrap:anywhere}.status.ok{background:#dcfce7;color:#166534}.status.err{background:#fee2e2;color:#991b1b}.count{font-size:2.5rem;font-weight:800}ul{padding-left:22px;overflow-wrap:anywhere}li{margin:8px 0}.muted{font-size:.9rem;color:#667085}
+</style>
+</head>
+<body>
+<h1>📷 Escáner Linde V1</h1>
+<p>Prueba de lectura de códigos de barras. No modifica el inventario.</p>
+<section>
+<video id="preview" autoplay playsinline muted></video>
+<div><button id="start">Iniciar cámara</button><button id="stop" class="secondary" disabled>Detener</button></div>
+<div id="status" class="status" role="status">Listo para iniciar.</div>
+<p class="muted">Apunta a la etiqueta pequeña de Linde y mantén el código completo dentro de la imagen. No es necesario fotografiarlo.</p>
+</section>
+<section>
+<div>Códigos diferentes detectados</div><div id="count" class="count">0</div>
+<button id="clear" class="danger">Limpiar lista</button><ul id="list"></ul>
+</section>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+(()=>{
+'use strict';
+const video=document.getElementById('preview'),status=document.getElementById('status'),list=document.getElementById('list'),count=document.getElementById('count');
+const startBtn=document.getElementById('start'),stopBtn=document.getElementById('stop');
+let reader=null,active=false,audio=null,lastCode='',lastAt=0;
+const seen=new Set();
+function show(message,type=''){status.textContent=message;status.className='status '+type;}
+function tone(error){
+ try{const C=window.AudioContext||window.webkitAudioContext;if(!C)return;audio=audio||new C();if(audio.state==='suspended')audio.resume();
+ const play=(at,freq,dur)=>{const osc=audio.createOscillator(),gain=audio.createGain();osc.type='sine';osc.frequency.value=freq;gain.gain.setValueAtTime(.0001,at);gain.gain.exponentialRampToValueAtTime(.12,at+.015);gain.gain.exponentialRampToValueAtTime(.0001,at+dur);osc.connect(gain);gain.connect(audio.destination);osc.start(at);osc.stop(at+dur+.02);};
+ const now=audio.currentTime;if(error){play(now,330,.12);play(now+.16,260,.17);}else play(now,850,.12);
+ }catch(e){console.warn('Audio no disponible',e);}
+}
+function detected(value){
+ const code=String(value||'').trim();if(!code)return;
+ const now=Date.now();if(code===lastCode&&now-lastAt<1800)return;lastCode=code;lastAt=now;
+ if(seen.has(code)){show('⚠️ REPETIDO: '+code,'err');tone(true);return;}
+ seen.add(code);count.textContent=String(seen.size);const li=document.createElement('li');li.textContent=code;list.prepend(li);
+ show('✅ NUEVO: '+code,'ok');tone(false);
+}
+async function stop(){active=false;if(reader){try{reader.reset();}catch(e){console.warn(e);}reader=null;}
+ if(video.srcObject){video.srcObject.getTracks().forEach(t=>t.stop());video.srcObject=null;}
+ startBtn.disabled=false;stopBtn.disabled=true;
+}
+startBtn.addEventListener('click',async()=>{
+ if(active)return;
+ if(!window.isSecureContext){show('Se necesita HTTPS para utilizar la cámara.','err');return;}
+ if(!navigator.mediaDevices?.getUserMedia){show('Este navegador no permite acceder a la cámara.','err');return;}
+ if(!window.ZXing){show('No se cargó el lector ZXing. Revisa tu conexión a internet y vuelve a abrir la página.','err');return;}
+ try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();await audio.resume();}catch(e){console.warn('Audio',e);}
+ active=true;startBtn.disabled=true;stopBtn.disabled=false;show('Solicitando permiso de cámara...');
+ try{
+ reader=new ZXing.BrowserMultiFormatReader();
+ await reader.decodeFromVideoDevice(null,video,(result,error)=>{
+ if(!active)return;
+ if(result)detected(result.getText());
+ else if(error && !(error instanceof ZXing.NotFoundException))console.debug('Lectura:',error);
+ });
+ if(active)show('Cámara activa. Acerca un código de barras.');
+ }catch(e){show('No se pudo iniciar la cámara: '+(e.message||e),'err');await stop();}
+});
+stopBtn.addEventListener('click',async()=>{await stop();show('Cámara detenida.');});
+document.getElementById('clear').addEventListener('click',()=>{
+ if(!confirm('¿Borrar los códigos de esta prueba?'))return;
+ seen.clear();list.textContent='';count.textContent='0';lastCode='';lastAt=0;show('Lista limpia. Puedes seguir escaneando.');
+});
+window.addEventListener('pagehide',()=>{if(reader)reader.reset();});
+})();
+</script>
+</body>
+</html>
